@@ -94,7 +94,10 @@ class PreviewTests(unittest.TestCase):
         args = launch.call_args.args[0]
         self.assertIn("--serial=serial-1", args)
         self.assertIn("--display-id=1", args)
-        self.assertIn("--no-control", args)
+        self.assertNotIn("--no-control", args)
+        self.assertIn("--mouse=sdk", args)
+        self.assertIn("--keyboard=disabled", args)
+        self.assertIn("--no-clipboard-autosync", args)
         self.assertIn("--no-audio", args)
         self.assertIn("--hwdec=disabled", args)
         self.assertIn("--no-window-aspect-ratio-lock", args)

@@ -1,4 +1,4 @@
-"""通过官方 scrcpy 客户端提供只读视频预览。"""
+"""通过官方 scrcpy 客户端提供支持鼠标操作的视频预览。"""
 
 import logging
 import os
@@ -16,7 +16,8 @@ def scrcpyPath():
 
 def previewCommand(client, displayId):
     return [str(scrcpyPath()), f"--serial={client.serial}", f"--display-id={displayId}",
-            "--no-control", "--no-audio", "--max-size=1280", "--max-fps=30", "--video-bit-rate=4M",
+            "--mouse=sdk", "--keyboard=disabled", "--no-clipboard-autosync",
+            "--no-audio", "--max-size=1280", "--max-fps=30", "--video-bit-rate=4M",
             "--hwdec=disabled",
             "--no-window-aspect-ratio-lock", "--render-fit=letterbox",
             "--window-title=ADB Clicker - Live Preview", "--window-width=480"]
@@ -36,7 +37,7 @@ def runPreview(client, stopEvent, report):
     environment = os.environ.copy()
     environment["ADB"] = client.executable
     environment["SCRCPY_SERVER_PATH"] = str(executable.parent / "scrcpy-server")
-    logger.info("开始视频预览，逻辑屏幕=%s，物理屏幕=%s，最大帧率=30", selected.logicalId, selected.physicalId)
+    logger.info("开始视频预览，逻辑屏幕=%s，物理屏幕=%s，最大帧率=30，鼠标控制已开启", selected.logicalId, selected.physicalId)
     process = subprocess.Popen(previewCommand(client, selected.logicalId), cwd=executable.parent,
                                env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
