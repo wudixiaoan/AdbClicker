@@ -23,5 +23,15 @@ foreach ($file in $adbFiles) {
     Copy-Item -LiteralPath (Join-Path $adbSource $file) -Destination (Join-Path $adbDestination $file) -Force
 }
 Copy-Item -LiteralPath 'README.md' -Destination 'dist\README.md' -Force
+New-Item -ItemType Directory -Path 'dist\configs' -Force > $null
+Copy-Item -LiteralPath 'configs\README.txt' -Destination 'dist\configs\README.txt' -Force
 Compress-Archive -LiteralPath 'dist\AdbClicker.exe', 'dist\adb', 'dist\README.md' -DestinationPath 'dist\AdbClicker-portable.zip' -Force
+# 只添加目录说明，避免将本机用户配置混入发布包。
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [System.IO.Compression.ZipFile]::Open((Join-Path $PSScriptRoot 'dist\AdbClicker-portable.zip'), 'Update')
+try {
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $PSScriptRoot 'configs\README.txt'), 'configs/README.txt') > $null
+} finally {
+    $archive.Dispose()
+}
 Write-Host '打包完成：dist\AdbClicker-portable.zip。完整解压后双击 AdbClicker.exe。'

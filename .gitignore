@@ -6,3 +6,4 @@ clicker-config.json
 build/
 dist/
 *.spec
+configs/*.json

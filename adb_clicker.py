@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from click_engine import AdbClient, BUILTIN_ADB, Region, Settings, runTask
+from config_store import ConfigStore, defaultConfigDirectory, writeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,11 @@ class QueueHandler(logging.Handler):
 
 
 class ClickerApp:
-    def __init__(self, root):
+    def __init__(self, root, configDirectory=None):
         self.root = root
         root.title("ADB 多区域随机点击器")
-        root.geometry("1000x870")
-        root.minsize(900, 810)
+        root.geometry("1280x900")
+        root.minsize(1180, 810)
         self.regions = []
         self.events = queue.Queue()
         self.stopEvent = threading.Event()
@@ -40,11 +41,14 @@ class ClickerApp:
         self.controls = []
         self.values = {}
         self.displaySerial = ""
+        self.configStore = ConfigStore(configDirectory or defaultConfigDirectory())
+        self.currentConfig = None
         handler = QueueHandler(self.events)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
         logging.getLogger().addHandler(handler)
         logging.getLogger().setLevel(logging.INFO)
         self.buildUi()
+        self.refreshConfigList()
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(100, self.poll)
 
@@ -63,8 +67,11 @@ class ClickerApp:
         return widget
 
     def buildUi(self):
-        outer = ttk.Frame(self.root, padding=14)
-        outer.pack(fill="both", expand=True)
+        shell = ttk.Frame(self.root)
+        shell.pack(fill="both", expand=True)
+        self.buildConfigPanel(shell)
+        outer = ttk.Frame(shell, padding=14)
+        outer.pack(side="left", fill="both", expand=True)
         ttk.Label(outer, text="ADB 多区域随机点击器", font=("Microsoft YaHei UI", 18, "bold")).pack(anchor="w")
         ttk.Label(outer, text="每轮先随机等待 → 按列表顺序遍历区域 → 各区域随机次数、随机坐标点击").pack(anchor="w", pady=(4, 10))
         device = ttk.LabelFrame(outer, text="1. 连接 Android 设备", padding=8)
@@ -127,8 +134,8 @@ class ClickerApp:
             self.field(timing, label, key, default, row, col)
         bar = ttk.Frame(outer)
         bar.pack(fill="x", pady=6)
-        self.button(bar, "保存配置", self.saveConfig)
-        self.button(bar, "加载配置", self.loadConfig)
+        self.button(bar, "导出配置…", self.saveConfig)
+        self.button(bar, "从文件加载…", self.loadConfig)
         self.button(bar, "开始", self.start)
         self.stopButton = ttk.Button(bar, text="停止", command=self.stop, state="disabled")
         self.stopButton.pack(side="left", padx=8)
@@ -136,6 +143,109 @@ class ClickerApp:
         ttk.Label(outer, textvariable=self.status, wraplength=920).pack(anchor="w", pady=4)
         self.logBox = tk.Text(outer, height=6, state="disabled", font=("Consolas", 10))
         self.logBox.pack(fill="both", expand=True)
+
+    def buildConfigPanel(self, parent):
+        panel = ttk.LabelFrame(parent, text="配置列表", padding=10)
+        panel.pack(side="left", fill="y", padx=(10, 0), pady=14)
+        self.configDirectoryText = tk.StringVar(value=str(self.configStore.directory))
+        ttk.Label(panel, textvariable=self.configDirectoryText, wraplength=220).pack(fill="x")
+        row = ttk.Frame(panel)
+        row.pack(fill="x")
+        self.button(row, "选择目录", self.chooseConfigDirectory)
+        self.button(row, "刷新", self.refreshConfigList)
+        self.configList = tk.Listbox(panel, width=27, height=16, exportselection=False)
+        self.configList.pack(fill="both", expand=True, pady=6)
+        self.controls.append(self.configList)
+        self.configList.bind("<Double-Button-1>", lambda _: self.loadListedConfig())
+        ttk.Label(panel, text="配置名称（用于另存）").pack(anchor="w")
+        self.configName = tk.StringVar()
+        nameEntry = ttk.Entry(panel, textvariable=self.configName)
+        nameEntry.pack(fill="x", pady=5)
+        self.controls.append(nameEntry)
+        for label, callback in (("加载选中", self.loadListedConfig), ("另存为新配置", self.saveNewConfig),
+                                ("更新当前配置", self.updateCurrentConfig), ("删除选中", self.deleteListedConfig)):
+            button = ttk.Button(panel, text=label, command=callback)
+            button.pack(fill="x", pady=3)
+            self.controls.append(button)
+        self.currentConfigText = tk.StringVar(value="当前配置：未加载")
+        ttk.Label(panel, textvariable=self.currentConfigText, wraplength=220).pack(fill="x", pady=8)
+        ttk.Label(panel, text="区域修改后先点“更新选中”，\n再更新当前配置。", wraplength=220).pack(fill="x")
+
+    def refreshConfigList(self):
+        try:
+            selected = self.configList.get(self.configList.curselection()[0]) if self.configList.curselection() else None
+            names = self.configStore.names()
+            self.configList.delete(0, "end")
+            for name in names:
+                self.configList.insert("end", name)
+            if selected in names:
+                self.configList.selection_set(names.index(selected))
+            logger.info("配置列表刷新完成，目录=%s，数量=%s", self.configStore.directory, len(names))
+        except OSError as exc:
+            self.error(exc)
+
+    def chooseConfigDirectory(self):
+        directory = filedialog.askdirectory(initialdir=self.configStore.directory)
+        if directory:
+            self.configStore = ConfigStore(directory)
+            self.configDirectoryText.set(str(self.configStore.directory))
+            self.currentConfig = None
+            self.currentConfigText.set("当前配置：未加载")
+            self.refreshConfigList()
+
+    def selectedConfigPath(self):
+        selection = self.configList.curselection()
+        if not selection:
+            raise ValueError("请先在配置列表中选择一个配置")
+        return self.configStore.path(self.configList.get(selection[0]))
+
+    def loadListedConfig(self):
+        if self.busy:
+            return
+        try:
+            self.loadConfig(self.selectedConfigPath())
+        except ValueError as exc:
+            self.error(exc)
+
+    def saveNewConfig(self):
+        try:
+            path = self.configStore.path(self.configName.get())
+            if path.exists():
+                raise ValueError("同名配置已存在，请使用其他名称，或加载后点击“更新当前配置”")
+            self.saveConfig(path)
+        except (OSError, ValueError) as exc:
+            self.error(exc)
+
+    def updateCurrentConfig(self):
+        try:
+            if self.currentConfig is None or self.currentConfig.parent != self.configStore.directory:
+                raise ValueError("请先加载列表中的配置，或另存为新配置")
+            path = self.configStore.path(self.currentConfig.stem)
+            if not path.is_file():
+                raise ValueError("当前配置文件已不存在，请另存为新配置")
+            self.saveConfig(path)
+        except (OSError, ValueError) as exc:
+            self.error(exc)
+
+    def deleteListedConfig(self):
+        try:
+            path = self.selectedConfigPath()
+            if not messagebox.askyesno("删除配置", f"确定删除配置“{path.stem}”？此操作会删除文件。", parent=self.root):
+                return
+            self.configStore.delete(path.stem)
+            if self.currentConfig == path:
+                self.currentConfig = None
+                self.currentConfigText.set("当前配置：未保存（原文件已删除）")
+            self.refreshConfigList()
+            self.status.set(f"已删除配置：{path.stem}")
+        except (OSError, ValueError) as exc:
+            self.error(exc)
+
+    def markCurrentConfig(self, path):
+        self.currentConfig = Path(path).resolve()
+        self.configName.set(self.currentConfig.stem)
+        self.currentConfigText.set(f"当前配置：{self.currentConfig.stem}")
+        self.refreshConfigList()
 
     def client(self):
         path = self.values["adb"].get().strip()
@@ -406,23 +516,25 @@ class ClickerApp:
         self.status.set("正在停止，等待当前 ADB 命令结束（最长约 15 秒）…")
         logger.info("用户请求停止点击")
 
-    def saveConfig(self):
+    def saveConfig(self, path=None):
         try:
             settings = self.readSettings()
-            path = filedialog.asksaveasfilename(defaultextension=".json", initialfile="clicker-config.json",
+            path = path or filedialog.asksaveasfilename(defaultextension=".json", initialfile="clicker-config.json",
                                               filetypes=[("JSON 配置", "*.json")])
             if path:
                 config = {"version": 2, "adb": self.values["adb"].get(), "serial": self.serial.get(),
                           "settings": asdict(settings), "regions": [asdict(region) for region in self.regions],
                           "physicalDisplayId": self.client().physicalDisplayId}
                 logger.info("开始保存配置，路径=%s", path)
-                Path(path).write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+                writeConfig(path, config)
+                self.markCurrentConfig(path)
+                self.status.set(f"配置已保存：{Path(path).stem}")
                 logger.info("配置保存成功")
         except (OSError, ValueError) as exc:
             self.error(exc)
 
-    def loadConfig(self):
-        path = filedialog.askopenfilename(filetypes=[("JSON 配置", "*.json")])
+    def loadConfig(self, path=None):
+        path = path or filedialog.askopenfilename(filetypes=[("JSON 配置", "*.json")])
         if not path:
             return
         try:
@@ -456,6 +568,7 @@ class ClickerApp:
             for key, value in asdict(settings).items():
                 self.values[key].set(value)
             self.redraw()
+            self.markCurrentConfig(path)
             self.status.set("配置已加载。开始前请确认设备与屏幕方向。")
             logger.info("配置读取成功，区域数=%s", len(regions))
         except (OSError, ValueError, KeyError, TypeError) as exc:
