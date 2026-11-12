@@ -1,0 +1,2 @@
+# 仅用于打包，运行 EXE 无需安装 Python 或此依赖。
+PyInstaller==6.22.3

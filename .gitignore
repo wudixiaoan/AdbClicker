@@ -2,3 +2,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 clicker-config.json
+.build-venv/
+build/
+dist/
+*.spec

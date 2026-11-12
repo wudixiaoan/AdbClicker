@@ -4,16 +4,24 @@ Windows 电脑端配置界面，使用 Python 自带 Tkinter，无第三方 Pyth
 
 ## 启动
 
-需要 Python 3.10 或以上（含 Tkinter）和 Android SDK Platform Tools 中的 adb.exe。
+**直接双击 `dist/AdbClicker.exe` 启动，无需 Python，无需命令行。**
+EXE 已包含 Python 和 Tkinter 运行环境；ADB 仍使用电脑上安装的 Android SDK Platform Tools 中的 adb.exe。
+若自动找不到 ADB，在界面中点击“选择 adb.exe”指定路径。
 手机打开开发者选项、USB 调试，连接电脑并在手机上允许调试。
 
-在本目录的 PowerShell 执行：
+仅开发时从源码启动才需要 Python 3.10 或以上（含 Tkinter），在本目录的 PowerShell 执行：
 
 ```powershell
 python .\adb_clicker.py
 ```
 
 也可运行 `start.ps1`。如果 PowerShell 策略禁止脚本，直接使用上面的 Python 命令。
+
+## 重新打包（开发用）
+
+执行 `build.ps1`，会在项目的 `.build-venv` 中安装 `requirements-build.txt` 指定的 PyInstaller，
+生成无控制台窗口的单文件 `dist/AdbClicker.exe`。PyInstaller 仅作为构建依赖，用于打包 Python、Tkinter 和程序代码。
+修改源码后需要重新打包，已生成的 EXE 不会自动更新。`build/`、`dist/` 和构建环境不纳入 Git。
 
 ## 配置与执行
 
