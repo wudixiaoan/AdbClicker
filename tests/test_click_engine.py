@@ -1,5 +1,6 @@
 import random
 import subprocess
+import struct
 import unittest
 from unittest.mock import patch
 
@@ -33,6 +34,25 @@ class FakeStop:
 
 
 class EngineTests(unittest.TestCase):
+    def test_screenshot_extracts_png_after_device_warning_without_changing_bytes(self):
+        # 模拟真实设备多显示屏警告；图片内的换行字节不能被替换。
+        png = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
+               + struct.pack(">II", 2156, 2344) + b"\x08\x06\x00\x00\x00" + b"\x00" * 4
+               + b"\r\n\r\r\n")
+        client = AdbClient(serial="test")
+        for prefix in (b"", b"[Warning] Multiple displays were found!\n" + b"x" * 300):
+            with self.subTest(prefixLength=len(prefix)), patch.object(client, "run", return_value=prefix + png):
+                data, width, height = client.screenshot()
+                self.assertEqual(data, png)
+                self.assertEqual((width, height), (2156, 2344))
+
+    def test_screenshot_rejects_empty_text_truncated_and_invalid_headers(self):
+        client = AdbClient(serial="test")
+        for data in (b"", b"Permission denied", b"\x89PNG\r\n\x1a\n", b"\x89PNG\r\n\x1a\n" + b"x" * 40):
+            with self.subTest(data=data), patch.object(client, "run", return_value=data):
+                with self.assertRaises(RuntimeError):
+                    client.screenshot()
+
     def test_region_order_and_three_independent_wait_types(self):
         device = FakeDevice()
         stop = FakeStop()

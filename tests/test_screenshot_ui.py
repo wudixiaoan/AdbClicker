@@ -7,6 +7,7 @@ from unittest.mock import patch
 import zlib
 
 from adb_clicker import ClickerApp
+from click_engine import AdbClient
 
 
 def makePng(width, height):
@@ -42,9 +43,12 @@ class ScreenshotTests(unittest.TestCase):
     def test_multiple_selections_on_scaled_screenshot(self):
         self.root.deiconify()
         self.root.update()
+        client = AdbClient(serial="test")
+        with patch.object(client, "run", return_value=b"[Warning] Multiple displays were found!\n" + makePng(201, 401)):
+            screenshot = client.screenshot()
         with patch.object(self.root, "winfo_screenheight", return_value=540), \
                 patch.object(self.root, "winfo_screenwidth", return_value=1000):
-            self.app.showScreenshot((makePng(201, 401), 201, 401))
+            self.app.showScreenshot(screenshot)
         window = next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
         window.update()
         canvas = next(child for child in window.winfo_children() if isinstance(child, tk.Canvas))

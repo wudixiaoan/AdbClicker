@@ -95,8 +95,16 @@ class AdbClient:
 
     def screenshot(self):
         data = self.run("exec-out", "screencap", "-p", binary=True)
-        if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n":
-            raise RuntimeError("设备未返回有效 PNG 截图")
+        # 部分设备会将多显示屏警告写入 stdout，exec-out 会把它与 PNG 一起返回。
+        pngOffset = data.find(b"\x89PNG\r\n\x1a\n")
+        if pngOffset < 0:
+            logger.error("截图缺少 PNG 标识，返回字节数=%s，数据头=%s", len(data), data[:32].hex())
+            raise RuntimeError(f"设备未返回有效 PNG 截图（返回 {len(data)} 字节，未找到 PNG 标识）")
+        if pngOffset:
+            logger.warning("截图包含前置提示，已跳过 %s 字节并提取 PNG 图片", pngOffset)
+            data = data[pngOffset:]
+        if len(data) < 33 or data[8:16] != b"\x00\x00\x00\x0dIHDR":
+            raise RuntimeError("设备返回的 PNG 截图头不完整或格式无效")
         width, height = struct.unpack(">II", data[16:24])
         if not width or not height:
             raise RuntimeError("截图尺寸无效")
