@@ -18,6 +18,7 @@ def previewCommand(client, displayId):
     return [str(scrcpyPath()), f"--serial={client.serial}", f"--display-id={displayId}",
             "--no-control", "--no-audio", "--max-size=1280", "--max-fps=30", "--video-bit-rate=4M",
             "--hwdec=disabled",
+            "--no-window-aspect-ratio-lock", "--render-fit=letterbox",
             "--window-title=ADB Clicker - Live Preview", "--window-width=480"]
 
 
