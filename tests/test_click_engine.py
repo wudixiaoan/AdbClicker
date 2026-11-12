@@ -4,7 +4,7 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from click_engine import AdbClient, Region, Settings, runTask
+from click_engine import AdbClient, Display, Region, Settings, parseDisplays, runTask
 
 
 class FakeDevice:
@@ -41,7 +41,8 @@ class EngineTests(unittest.TestCase):
                + b"\r\n\r\r\n")
         client = AdbClient(serial="test")
         for prefix in (b"", b"[Warning] Multiple displays were found!\n" + b"x" * 300):
-            with self.subTest(prefixLength=len(prefix)), patch.object(client, "run", return_value=prefix + png):
+            with self.subTest(prefixLength=len(prefix)), patch.object(client, "run", return_value=prefix + png), \
+                    patch.object(client, "displays", return_value=[Display("123", 0, 2156, 2344, "ON")]):
                 data, width, height = client.screenshot()
                 self.assertEqual(data, png)
                 self.assertEqual((width, height), (2156, 2344))
@@ -49,7 +50,8 @@ class EngineTests(unittest.TestCase):
     def test_screenshot_rejects_empty_text_truncated_and_invalid_headers(self):
         client = AdbClient(serial="test")
         for data in (b"", b"Permission denied", b"\x89PNG\r\n\x1a\n", b"\x89PNG\r\n\x1a\n" + b"x" * 40):
-            with self.subTest(data=data), patch.object(client, "run", return_value=data):
+            with self.subTest(data=data), patch.object(client, "run", return_value=data), \
+                    patch.object(client, "displays", return_value=[Display("123", 0, 2156, 2344, "ON")]):
                 with self.assertRaises(RuntimeError):
                     client.screenshot()
 
@@ -114,9 +116,51 @@ class EngineTests(unittest.TestCase):
     @patch("click_engine.subprocess.run")
     def test_adb_targets_selected_device_and_uses_argument_list(self, run):
         run.return_value = subprocess.CompletedProcess([], 0, b"", b"")
-        AdbClient("C:/with space/adb.exe", "serial-1").tap(12, 34)
-        self.assertEqual(run.call_args.args[0], ["C:/with space/adb.exe", "-s", "serial-1", "shell", "input", "tap", "12", "34"])
+        client = AdbClient("C:/with space/adb.exe", "serial-1")
+        client.logicalDisplayId = 1
+        client.tap(12, 34)
+        self.assertEqual(run.call_args.args[0], ["C:/with space/adb.exe", "-s", "serial-1", "shell", "input", "-d", "1", "tap", "12", "34"])
         self.assertEqual(run.call_args.kwargs["timeout"], 15)
+
+    def test_parse_foldable_screens_ignores_stale_override_state(self):
+        dump = '''
+    mBaseDisplayInfo=DisplayInfo{"Inner", displayId 1, real 2156 x 2344, state OFF, uniqueId "local:111"}
+    mOverrideDisplayInfo=DisplayInfo{"Inner", displayId 1, real 2156 x 2344, state ON, uniqueId "local:111"}
+    mBaseDisplayInfo=DisplayInfo{"Outer", displayId 0, real 1060 x 2376, state ON, uniqueId "local:222"}
+'''
+        self.assertEqual(parseDisplays(dump), [Display("222", 0, 1060, 2376, "ON"),
+                                               Display("111", 1, 2156, 2344, "OFF")])
+
+    def test_screenshot_uses_selected_physical_screen_and_updates_tap_mapping(self):
+        png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + struct.pack(">II", 1060, 2376) + b"\0" * 9
+        client = AdbClient(serial="test", physicalDisplayId="222")
+        for logicalId in (1, 0):
+            with patch.object(client, "displays", return_value=[Display("222", logicalId, 1060, 2376, "ON")]), \
+                    patch.object(client, "run", return_value=png) as run:
+                client.screenshot()
+                run.assert_called_with("exec-out", "screencap", "-p", "-d", "222", binary=True)
+                client.tap(10, 20)
+                run.assert_called_with("shell", "input", "-d", str(logicalId), "tap", "10", "20")
+
+    def test_default_selects_logical_main_screen_instead_of_first_physical_screen(self):
+        png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + struct.pack(">II", 1060, 2376) + b"\0" * 9
+        client = AdbClient(serial="test")
+        with patch.object(client, "displays", return_value=[Display("111", 1, 2156, 2344, "OFF"),
+                                                            Display("222", 0, 1060, 2376, "ON")]), \
+                patch.object(client, "run", return_value=png) as run:
+            client.screenshot()
+            run.assert_called_with("exec-out", "screencap", "-p", "-d", "222", binary=True)
+
+    def test_off_or_missing_screen_blocks_capture_and_invalidates_previous_tap_target(self):
+        client = AdbClient(serial="test", physicalDisplayId="111")
+        for displays in ([Display("111", 0, 2156, 2344, "OFF")], [Display("222", 0, 1060, 2376, "ON")]):
+            client.logicalDisplayId = 0
+            with patch.object(client, "displays", return_value=displays), patch.object(client, "run") as run:
+                with self.assertRaises(RuntimeError):
+                    client.screenshot()
+                with self.assertRaises(RuntimeError):
+                    client.tap(10, 20)
+                run.assert_not_called()
 
 
 if __name__ == "__main__":

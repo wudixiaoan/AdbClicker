@@ -1,5 +1,7 @@
 import logging
+from pathlib import Path
 import struct
+import tempfile
 import tkinter as tk
 from tkinter import ttk
 import unittest
@@ -7,7 +9,7 @@ from unittest.mock import patch
 import zlib
 
 from adb_clicker import ClickerApp
-from click_engine import AdbClient
+from click_engine import AdbClient, Display
 
 
 def makePng(width, height):
@@ -44,7 +46,8 @@ class ScreenshotTests(unittest.TestCase):
         self.root.deiconify()
         self.root.update()
         client = AdbClient(serial="test")
-        with patch.object(client, "run", return_value=b"[Warning] Multiple displays were found!\n" + makePng(201, 401)):
+        with patch.object(client, "run", return_value=b"[Warning] Multiple displays were found!\n" + makePng(201, 401)), \
+                patch.object(client, "displays", return_value=[Display("123", 0, 201, 401, "ON")]):
             screenshot = client.screenshot()
         with patch.object(self.root, "winfo_screenheight", return_value=540), \
                 patch.object(self.root, "winfo_screenwidth", return_value=1000):
@@ -75,6 +78,29 @@ class ScreenshotTests(unittest.TestCase):
         self.assertEqual((region.x1, region.y1, region.x2, region.y2), (0, 0, 200, 400))
         self.assertEqual(len(canvas.find_withtag("saved")), 4)
         self.assertEqual(len(self.app.tree.get_children()), 2)
+
+    def test_screen_choice_targets_physical_id_and_resets_when_device_changes(self):
+        self.app.serial.set("device-a")
+        self.app.resetDisplays()
+        self.app.screen.set(Display("222", 1, 1060, 2376, "ON").label)
+        self.assertEqual(self.app.client().physicalDisplayId, "222")
+        self.app.serial.set("device-b")
+        self.assertEqual(self.app.client().physicalDisplayId, "")
+
+    def test_screen_choice_survives_config_save_and_load(self):
+        self.app.serial.set("device-a")
+        self.app.resetDisplays()
+        self.app.screen.set(Display("222", 0, 1060, 2376, "ON").label)
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            path = str(Path(directory) / "config.json")
+            with patch("adb_clicker.filedialog.asksaveasfilename", return_value=path), \
+                    patch.object(self.app, "error", side_effect=AssertionError("保存失败")):
+                self.app.saveConfig()
+            self.app.resetDisplays()
+            with patch("adb_clicker.filedialog.askopenfilename", return_value=path), \
+                    patch.object(self.app, "error", side_effect=AssertionError("加载失败")):
+                self.app.loadConfig()
+            self.assertEqual(self.app.client().physicalDisplayId, "222")
 
 
 if __name__ == "__main__":

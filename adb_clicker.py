@@ -39,6 +39,7 @@ class ClickerApp:
         self.closing = False
         self.controls = []
         self.values = {}
+        self.displaySerial = ""
         handler = QueueHandler(self.events)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
         logging.getLogger().addHandler(handler)
@@ -80,6 +81,16 @@ class ClickerApp:
         refresh = ttk.Button(device, text="刷新设备", command=self.refresh)
         refresh.grid(row=1, column=2, padx=4)
         self.controls.append(refresh)
+        ttk.Label(device, text="屏幕").grid(row=2, column=0, padx=6, sticky="w")
+        self.screen = tk.StringVar(value="自动选择主屏")
+        self.screenBox = ttk.Combobox(device, textvariable=self.screen, state="readonly", width=49,
+                                      values=["自动选择主屏"])
+        self.screenBox.grid(row=2, column=1, padx=6, pady=5, sticky="ew")
+        self.controls.append(self.screenBox)
+        refreshScreens = ttk.Button(device, text="刷新屏幕", command=self.refreshDisplays)
+        refreshScreens.grid(row=2, column=2, padx=4)
+        self.controls.append(refreshScreens)
+        self.deviceBox.bind("<<ComboboxSelected>>", lambda _: self.resetDisplays())
 
         area = ttk.LabelFrame(outer, text="2. 点击区域（屏幕像素坐标，包含边界；按列表顺序执行）", padding=8)
         area.pack(fill="x", pady=8)
@@ -126,7 +137,27 @@ class ClickerApp:
         path = self.values["adb"].get().strip()
         if not path:
             raise ValueError("ADB 路径不能为空")
-        return AdbClient(path, self.serial.get().strip())
+        if self.displaySerial != self.serial.get().strip():
+            self.resetDisplays()
+        displayId = self.screen.get().rsplit(" | ", 1)[-1] if self.screen.get() != "自动选择主屏" else ""
+        if displayId and not displayId.isdecimal():
+            raise ValueError("屏幕选择无效，请刷新屏幕后重新选择")
+        return AdbClient(path, self.serial.get().strip(), displayId)
+
+    def resetDisplays(self):
+        self.displaySerial = self.serial.get().strip()
+        self.screen.set("自动选择主屏")
+        self.screenBox.configure(values=["自动选择主屏"])
+
+    def refreshDisplays(self):
+        try:
+            client = self.client()
+            if not client.serial:
+                raise ValueError("请先刷新并选择设备")
+            self.status.set("正在读取内屏、外屏等显示屏信息…")
+            self.background(client.displays, "displays")
+        except ValueError as exc:
+            self.error(exc)
 
     def readRegion(self):
         region = Region(self.values["name"].get().strip(), **{
@@ -201,6 +232,7 @@ class ClickerApp:
             widget.configure(state="disabled" if busy else "normal")
         if not busy:
             self.deviceBox.configure(state="readonly")
+            self.screenBox.configure(state="readonly")
         self.stopButton.configure(state="normal" if running else "disabled")
 
     def background(self, operation, event, running=False):
@@ -368,7 +400,8 @@ class ClickerApp:
                                               filetypes=[("JSON 配置", "*.json")])
             if path:
                 config = {"version": 1, "adb": self.values["adb"].get(), "serial": self.serial.get(),
-                          "settings": asdict(settings), "regions": [asdict(region) for region in self.regions]}
+                          "settings": asdict(settings), "regions": [asdict(region) for region in self.regions],
+                          "physicalDisplayId": self.client().physicalDisplayId}
                 logger.info("开始保存配置，路径=%s", path)
                 Path(path).write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
                 logger.info("配置保存成功")
@@ -391,9 +424,16 @@ class ClickerApp:
                 region.validate()
             if not isinstance(config["adb"], str) or not config["adb"].strip() or not isinstance(config["serial"], str):
                 raise ValueError("ADB 路径或设备配置无效")
+            displayId = config.get("physicalDisplayId", "")
+            if not isinstance(displayId, str) or (displayId and not displayId.isdecimal()):
+                raise ValueError("屏幕 ID 配置无效")
             self.regions = regions
             self.values["adb"].set(config["adb"])
             self.serial.set(config["serial"])
+            self.resetDisplays()
+            if displayId:
+                self.screenBox.configure(values=["自动选择主屏", displayId])
+                self.screen.set(displayId)
             for key, value in asdict(settings).items():
                 self.values[key].set(value)
             self.redraw()
@@ -425,7 +465,14 @@ class ClickerApp:
                 self.deviceBox.configure(values=value)
                 if self.serial.get() not in value:
                     self.serial.set(value[0] if value else "")
+                    self.resetDisplays()
                 self.status.set(f"找到 {len(value)} 台可用设备" if value else "未找到可用设备，请检查 USB 调试及手机授权。")
+            elif event == "displays":
+                selectedId = self.client().physicalDisplayId
+                self.screenBox.configure(values=["自动选择主屏"] + [item.label for item in value])
+                selected = next((item for item in value if item.physicalId == selectedId), None)
+                self.screen.set(selected.label if selected else "自动选择主屏")
+                self.status.set(f"找到 {len(value)} 块屏幕，请按尺寸和点亮状态选择。折叠状态改变后请重新采集并框选。")
             elif event == "screenshot" and not self.closing:
                 self.showScreenshot(value)
                 self.status.set("截图已打开，请拖动框选。")
