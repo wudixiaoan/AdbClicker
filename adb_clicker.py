@@ -11,7 +11,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from click_engine import AdbClient, Region, Settings, runTask
+from click_engine import AdbClient, BUILTIN_ADB, Region, Settings, runTask
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +69,13 @@ class ClickerApp:
         ttk.Label(outer, text="每轮先随机等待 → 按列表顺序遍历区域 → 各区域随机次数、随机坐标点击").pack(anchor="w", pady=(4, 10))
         device = ttk.LabelFrame(outer, text="1. 连接 Android 设备", padding=8)
         device.pack(fill="x")
-        self.field(device, "ADB 路径", "adb", "adb", 0, 0, 52)
+        self.field(device, "ADB 路径", "adb", BUILTIN_ADB, 0, 0, 52)
         browse = ttk.Button(device, text="选择 adb.exe", command=self.browseAdb)
         browse.grid(row=0, column=2, padx=4)
         self.controls.append(browse)
+        builtin = ttk.Button(device, text="使用内置 ADB", command=lambda: self.values["adb"].set(BUILTIN_ADB))
+        builtin.grid(row=0, column=3, padx=4)
+        self.controls.append(builtin)
         ttk.Label(device, text="设备").grid(row=1, column=0, padx=6, sticky="w")
         self.serial = tk.StringVar()
         self.deviceBox = ttk.Combobox(device, textvariable=self.serial, state="readonly", width=49)

@@ -8,8 +8,27 @@ import random
 import re
 import struct
 import subprocess
+import sys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+BUILTIN_ADB = "内置 ADB"
+
+
+def bundledAdbPath():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "adb" / "adb.exe"
+    return Path(__file__).resolve().parent / "vendor" / "adb" / "adb.exe"
+
+
+def resolveAdbPath(executable):
+    if executable in (BUILTIN_ADB, "adb"):
+        bundled = bundledAdbPath()
+        if bundled.is_file():
+            return str(bundled)
+        if executable == BUILTIN_ADB:
+            raise ValueError("内置 ADB 文件缺失，请完整解压便携包，保留 EXE 旁的 adb 文件夹")
+    return executable
 
 
 def validateDelayRange(label, low, high, minimum=0):
@@ -100,7 +119,7 @@ class Settings:
 
 class AdbClient:
     def __init__(self, executable="adb", serial="", physicalDisplayId=""):
-        self.executable = executable
+        self.executable = resolveAdbPath(executable)
         self.serial = serial
         self.physicalDisplayId = physicalDisplayId
         self.logicalDisplayId = None

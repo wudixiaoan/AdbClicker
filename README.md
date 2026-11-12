@@ -4,9 +4,10 @@ Windows 电脑端配置界面，使用 Python 自带 Tkinter，无第三方 Pyth
 
 ## 启动
 
-**直接双击 `dist/AdbClicker.exe` 启动，无需 Python，无需命令行。**
-EXE 已包含 Python 和 Tkinter 运行环境；ADB 仍使用电脑上安装的 Android SDK Platform Tools 中的 adb.exe。
-若自动找不到 ADB，在界面中点击“选择 adb.exe”指定路径。
+**将 `dist/AdbClicker-portable.zip` 完整解压，双击 `AdbClicker.exe` 启动，无需安装 Python、ADB 或配置 PATH。**
+本机可直接双击 `dist/AdbClicker.exe`。EXE 已包含 Python 和 Tkinter，旁边的 `adb/` 文件夹包含 ADB 及所需 DLL。
+分发时请发送完整 ZIP，不要只复制 EXE。程序默认使用内置 ADB；也可手动指定其他版本，或点击“使用内置 ADB”切回。
+Windows 仍需要识别手机的 USB 调试接口；若设备管理器不能识别手机，需安装该设备厂商提供的 USB 驱动。
 手机打开开发者选项、USB 调试，连接电脑并在手机上允许调试。
 
 仅开发时从源码启动才需要 Python 3.10 或以上（含 Tkinter），在本目录的 PowerShell 执行：
@@ -20,12 +21,13 @@ python .\adb_clicker.py
 ## 重新打包（开发用）
 
 执行 `build.ps1`，会在项目的 `.build-venv` 中安装 `requirements-build.txt` 指定的 PyInstaller，
-生成无控制台窗口的单文件 `dist/AdbClicker.exe`。PyInstaller 仅作为构建依赖，用于打包 Python、Tkinter 和程序代码。
+生成无控制台窗口的 `dist/AdbClicker.exe`，复制项目 `vendor/adb/` 到 `dist/adb/`，并生成可分发的 `dist/AdbClicker-portable.zip`。
+ADB 保持为 EXE 旁的独立文件，避免单文件临时解压目录被后台 ADB 服务占用。PyInstaller 仅作为构建依赖，用于打包 Python、Tkinter 和程序代码。
 修改源码后需要重新打包，已生成的 EXE 不会自动更新。`build/`、`dist/` 和构建环境不纳入 Git。
 
 ## 配置与执行
 
-1. ADB 在 PATH 中时保留 `adb`，否则点击“选择 adb.exe”。刷新并选择设备。
+1. 保留默认的“内置 ADB”，点击“刷新设备”并选择设备；不需要配置系统 PATH。
 2. 折叠屏或多屏设备可点击“刷新屏幕”，按尺寸和点亮状态选择内屏或外屏；默认“自动选择主屏”。
    点击“采集屏幕并框选”，工具通过 ADB 读取所选屏幕的当前图片并显示。截图不会向手机存储写入文件。
 3. 在图片上按住鼠标左键拖出矩形，填写名称、该区域每轮最少/最多点击次数、完成后等待的最小/最大秒数，点击“添加此区域”。
