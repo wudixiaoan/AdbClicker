@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from click_engine import AdbClient, BUILTIN_ADB, Region, Settings, runTask
 from config_store import ConfigStore, defaultConfigDirectory, writeConfig
+from screen_preview import runPreview
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,13 @@ class ClickerApp:
         self.displaySerial = ""
         self.configStore = ConfigStore(configDirectory or defaultConfigDirectory())
         self.currentConfig = None
+        self.previewEnabled = tk.BooleanVar(value=False)
+        self.previewThread = None
+        self.previewStop = threading.Event()
+        self.previewGeneration = 0
+        self.previewTargetKey = None
+        self.previewPending = False
+        self.previewRunGeneration = None
         handler = QueueHandler(self.events)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
         logging.getLogger().addHandler(handler)
@@ -139,10 +147,73 @@ class ClickerApp:
         self.button(bar, "开始", self.start)
         self.stopButton = ttk.Button(bar, text="停止", command=self.stop, state="disabled")
         self.stopButton.pack(side="left", padx=8)
+        # 预览开关不随点击任务锁定，运行中也能独立关闭采集。
+        ttk.Checkbutton(bar, text="实时屏幕预览", variable=self.previewEnabled,
+                        command=self.togglePreview).pack(side="left", padx=8)
         self.status = tk.StringVar(value="就绪：连接设备并刷新，然后添加点击区域。")
         ttk.Label(outer, textvariable=self.status, wraplength=920).pack(anchor="w", pady=4)
         self.logBox = tk.Text(outer, height=6, state="disabled", font=("Consolas", 10))
         self.logBox.pack(fill="both", expand=True)
+
+    def togglePreview(self):
+        if not self.previewEnabled.get():
+            self.stopPreview()
+        else:
+            self.status.set("正在启动 scrcpy 视频预览…")
+
+    def stopPreview(self):
+        self.previewEnabled.set(False)
+        self.previewGeneration += 1
+        self.previewStop.set()
+        logger.info("已请求关闭视频预览")
+
+    def previewTarget(self):
+        return (self.values["adb"].get(), self.serial.get(), self.screen.get())
+
+    def queuePreview(self):
+        if self.closing or not self.previewEnabled.get():
+            return
+        if self.previewPending:
+            if self.previewTargetKey != self.previewTarget():
+                self.previewStop.set()
+                self.previewGeneration += 1
+            return
+        try:
+            client = self.client()
+            if not client.serial:
+                raise ValueError("请先刷新并选择设备，再开启预览")
+        except ValueError as exc:
+            self.stopPreview()
+            self.status.set(f"预览无法启动：{exc}")
+            logger.warning("预览无法启动，原因=%s", exc)
+            return
+        self.previewTargetKey = self.previewTarget()
+        self.previewGeneration += 1
+        generation = self.previewGeneration
+        self.previewRunGeneration = generation
+        self.previewPending = True
+        self.previewStop = threading.Event()
+        stopEvent = self.previewStop
+        def previewWork():
+            error = None
+            try:
+                runPreview(client, stopEvent,
+                           lambda message: self.events.put(("preview-status", (generation, message))))
+            except Exception as exc:
+                error = str(exc)
+                logger.exception("视频预览失败")
+            self.events.put(("preview-ended", (generation, error)))
+        self.previewThread = threading.Thread(target=previewWork, daemon=True)
+        self.previewThread.start()
+
+    def receivePreviewEnd(self, value):
+        generation, error = value
+        if generation == self.previewRunGeneration:
+            self.previewPending = False
+        if generation != self.previewGeneration or not self.previewEnabled.get():
+            return
+        self.previewEnabled.set(False)
+        self.status.set(f"视频预览已停止：{error}" if error else "视频预览已关闭。")
 
     def buildConfigPanel(self, parent):
         panel = ttk.LabelFrame(parent, text="配置列表", padding=10)
@@ -612,13 +683,21 @@ class ClickerApp:
                 self.status.set(value)
             elif event == "finished":
                 self.status.set(f"{'已停止' if self.stopEvent.is_set() else '任务完成'}，累计点击 {value} 次。")
-        if self.closing and (self.worker is None or not self.worker.is_alive()):
+            elif event == "preview-ended":
+                self.receivePreviewEnd(value)
+            elif event == "preview-status":
+                if value[0] == self.previewGeneration and self.previewEnabled.get():
+                    self.status.set(value[1])
+        self.queuePreview()
+        if (self.closing and (self.worker is None or not self.worker.is_alive())
+                and (self.previewThread is None or not self.previewThread.is_alive())):
             self.root.destroy()
             return
         self.root.after(100, self.poll)
 
     def close(self):
         self.closing = True
+        self.stopPreview()
         self.stop()
 
 

@@ -1,2 +1,3 @@
 * text=auto eol=lf
 vendor/adb/* -text
+vendor/scrcpy/* -text

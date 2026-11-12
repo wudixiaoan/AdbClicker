@@ -2,6 +2,8 @@ $ErrorActionPreference = 'Stop'
 chcp 65001 > $null
 Set-Location -LiteralPath $PSScriptRoot
 $adbSource = Join-Path $PSScriptRoot 'vendor\adb'
+$scrcpySource = Join-Path $PSScriptRoot 'vendor\scrcpy'
+if (-not (Test-Path -LiteralPath (Join-Path $scrcpySource 'scrcpy.exe'))) { throw '缺少内置 scrcpy' }
 $adbFiles = @('adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll', 'NOTICE.txt', 'source.properties')
 foreach ($file in $adbFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $adbSource $file))) {
@@ -23,9 +25,13 @@ foreach ($file in $adbFiles) {
     Copy-Item -LiteralPath (Join-Path $adbSource $file) -Destination (Join-Path $adbDestination $file) -Force
 }
 Copy-Item -LiteralPath 'README.md' -Destination 'dist\README.md' -Force
+New-Item -ItemType Directory -Path 'dist\scrcpy' -Force > $null
+Get-ChildItem -LiteralPath $scrcpySource -File | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path 'dist\scrcpy' $_.Name) -Force
+}
 New-Item -ItemType Directory -Path 'dist\configs' -Force > $null
 Copy-Item -LiteralPath 'configs\README.txt' -Destination 'dist\configs\README.txt' -Force
-Compress-Archive -LiteralPath 'dist\AdbClicker.exe', 'dist\adb', 'dist\README.md' -DestinationPath 'dist\AdbClicker-portable.zip' -Force
+Compress-Archive -LiteralPath 'dist\AdbClicker.exe', 'dist\adb', 'dist\scrcpy', 'dist\README.md' -DestinationPath 'dist\AdbClicker-portable.zip' -Force
 # 只添加目录说明，避免将本机用户配置混入发布包。
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [System.IO.Compression.ZipFile]::Open((Join-Path $PSScriptRoot 'dist\AdbClicker-portable.zip'), 'Update')

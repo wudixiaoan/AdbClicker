@@ -156,24 +156,24 @@ class AdbClient:
         logger.info("设备刷新完成，可用设备数=%s", len(devices))
         return devices
 
-    def displays(self):
+    def displays(self, quiet=False):
         displays = parseDisplays(self.run("shell", "dumpsys", "display"))
         if not displays:
             raise RuntimeError("无法识别设备的物理屏幕与逻辑屏幕映射，请检查 dumpsys display 输出")
-        logger.info("屏幕刷新完成，可选屏幕数=%s", len(displays))
+        (logger.debug if quiet else logger.info)("屏幕刷新完成，可选屏幕数=%s", len(displays))
         return displays
 
-    def screenshot(self):
+    def screenshot(self, quiet=False):
         # 折叠后物理屏与逻辑屏的映射可能互换，每次采集都重新解析。
         self.logicalDisplayId = None
-        displays = self.displays()
+        displays = self.displays(quiet=quiet)
         selected = next((item for item in displays if (
             item.physicalId == self.physicalDisplayId if self.physicalDisplayId else item.logicalId == 0)), None)
         if selected is None:
             raise RuntimeError("所选屏幕已不可用，请刷新屏幕列表后重新选择")
         if selected.state != "ON":
             raise RuntimeError("所选屏幕未点亮，请在手机上切换到该屏幕，或选择已点亮的屏幕后重新采集")
-        logger.info("采集所选屏幕，物理屏幕=%s，逻辑屏幕=%s，尺寸=%s×%s",
+        (logger.debug if quiet else logger.info)("采集所选屏幕，物理屏幕=%s，逻辑屏幕=%s，尺寸=%s×%s",
                     selected.physicalId, selected.logicalId, selected.width, selected.height)
         data = self.run("exec-out", "screencap", "-p", "-d", selected.physicalId, binary=True)
         # 部分设备会将多显示屏警告写入 stdout，exec-out 会把它与 PNG 一起返回。
@@ -190,7 +190,7 @@ class AdbClient:
         if not width or not height:
             raise RuntimeError("截图尺寸无效")
         self.logicalDisplayId = selected.logicalId
-        logger.info("读取截图完成，尺寸=%s×%s", width, height)
+        (logger.debug if quiet else logger.info)("读取截图完成，尺寸=%s×%s", width, height)
         return data, width, height
 
     def tap(self, x, y):
