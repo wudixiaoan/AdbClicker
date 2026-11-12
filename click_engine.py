@@ -1,6 +1,7 @@
 """ADB 随机点击任务及可独立测试的配置模型。"""
 
 from dataclasses import dataclass
+from decimal import Decimal
 import logging
 import math
 import random
@@ -9,6 +10,20 @@ import struct
 import subprocess
 
 logger = logging.getLogger(__name__)
+
+
+def validateDelayRange(label, low, high, minimum=0):
+    if not all(type(value) in (int, float) and math.isfinite(value) for value in (low, high)):
+        raise ValueError(f"{label}必须是有限数字")
+    if not minimum <= low <= high <= 86400:
+        raise ValueError(f"{label}应为 {minimum}～86400 秒，最小值不能大于最大值")
+    if any(Decimal(str(value)) * 1000 != (Decimal(str(value)) * 1000).to_integral_value()
+           for value in (low, high)):
+        raise ValueError(f"{label}最多支持 3 位小数（1 毫秒）")
+
+
+def randomDelay(rng, low, high):
+    return rng.randint(round(low * 1000), round(high * 1000)) / 1000
 
 
 @dataclass(frozen=True)
@@ -49,6 +64,8 @@ class Region:
     y2: int
     minClicks: int = 1
     maxClicks: int = 1
+    waitAfterMin: float = 1.0
+    waitAfterMax: float = 2.0
 
     def validate(self, width=None, height=None):
         values = (self.x1, self.y1, self.x2, self.y2, self.minClicks, self.maxClicks)
@@ -60,6 +77,7 @@ class Region:
             raise ValueError(f"区域 {self.name}：坐标必须非负，左上角不能大于右下角")
         if not 1 <= self.minClicks <= self.maxClicks <= 10000:
             raise ValueError(f"区域 {self.name}：点击次数应为 1～10000，最小值不能大于最大值")
+        validateDelayRange(f"区域 {self.name} 完成后等待", self.waitAfterMin, self.waitAfterMax)
         if width is not None and (self.x2 >= width or self.y2 >= height):
             raise ValueError(f"区域 {self.name} 超出屏幕 {width}×{height}")
 
@@ -71,17 +89,11 @@ class Settings:
     gapMin: float = 0.2
     gapMax: float = 0.5
     rounds: int = 0
-    regionGapMin: float = 1.0
-    regionGapMax: float = 2.0
 
     def validate(self):
         for label, low, high in (("轮间隔", self.intervalMin, self.intervalMax),
-                                 ("点击间隔", self.gapMin, self.gapMax),
-                                 ("区域间隔", self.regionGapMin, self.regionGapMax)):
-            if not all(type(value) in (int, float) and math.isfinite(value) for value in (low, high)):
-                raise ValueError(f"{label}必须是有限数字")
-            if not 0.05 <= low <= high <= 86400:
-                raise ValueError(f"{label}应为 0.05～86400 秒，最小值不能大于最大值")
+                                 ("点击间隔", self.gapMin, self.gapMax)):
+            validateDelayRange(label, low, high, minimum=0.001)
         if type(self.rounds) is not int or not 0 <= self.rounds <= 1000000:
             raise ValueError("循环轮数应为 0～1000000，0 表示无限循环")
 
@@ -180,22 +192,24 @@ def runTask(client, regions, settings, stopEvent, report, rng=None):
     roundIndex = 0
     totalClicks = 0
     while not stopEvent.is_set() and (settings.rounds == 0 or roundIndex < settings.rounds):
-        delay = rng.uniform(settings.intervalMin, settings.intervalMax)
-        report(f"等待 {delay:.2f} 秒后开始第 {roundIndex + 1} 轮")
+        delay = randomDelay(rng, settings.intervalMin, settings.intervalMax)
+        report(f"等待 {delay:.3f} 秒后开始第 {roundIndex + 1} 轮")
         if stopEvent.wait(delay):
             break
         roundIndex += 1
         logger.info("循环开始，轮次=%s，区域数=%s", roundIndex, len(regions))
         for regionIndex, region in enumerate(regions):
             if regionIndex:
-                regionDelay = rng.uniform(settings.regionGapMin, settings.regionGapMax)
-                report(f"区域间等待 {regionDelay:.2f} 秒，接下来执行 {region.name}")
+                previous = regions[regionIndex - 1]
+                regionDelay = randomDelay(rng, previous.waitAfterMin, previous.waitAfterMax)
+                report(f"{previous.name} 完成后等待 {regionDelay:.3f} 秒，接下来执行 {region.name}")
+                logger.info("区域完成后等待，来源=%s，目标=%s，等待=%.3f 秒", previous.name, region.name, regionDelay)
                 if stopEvent.wait(regionDelay):
                     return totalClicks
             count = rng.randint(region.minClicks, region.maxClicks)
             logger.info("区域点击开始，轮次=%s，区域=%s，次数=%s", roundIndex, region.name, count)
             for clickIndex in range(count):
-                if clickIndex and stopEvent.wait(rng.uniform(settings.gapMin, settings.gapMax)):
+                if clickIndex and stopEvent.wait(randomDelay(rng, settings.gapMin, settings.gapMax)):
                     return totalClicks
                 if stopEvent.is_set():
                     return totalClicks

@@ -4,7 +4,7 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from click_engine import AdbClient, Display, Region, Settings, parseDisplays, runTask
+from click_engine import AdbClient, Display, Region, Settings, parseDisplays, randomDelay, runTask
 
 
 class FakeDevice:
@@ -58,9 +58,9 @@ class EngineTests(unittest.TestCase):
     def test_region_order_and_three_independent_wait_types(self):
         device = FakeDevice()
         stop = FakeStop()
-        regions = [Region("A", 10, 20, 10, 20, 2, 2), Region("B", 30, 40, 30, 40, 2, 2)]
+        regions = [Region("A", 10, 20, 10, 20, 2, 2, 3, 3), Region("B", 30, 40, 30, 40, 2, 2)]
         settings = Settings(intervalMin=20, intervalMax=20, gapMin=.2, gapMax=.2,
-                            rounds=2, regionGapMin=3, regionGapMax=3)
+                            rounds=2)
         count = runTask(device, regions, settings, stop, lambda _: None)
         self.assertEqual(count, 8)
         self.assertEqual(device.taps, [(10, 20), (10, 20), (30, 40), (30, 40)] * 2)
@@ -101,9 +101,32 @@ class EngineTests(unittest.TestCase):
 
     def test_invalid_settings(self):
         for settings in (Settings(intervalMin=float("nan")), Settings(gapMax=float("inf")),
-                         Settings(regionGapMin=3, regionGapMax=2), Settings(rounds=-1)):
+                         Settings(gapMin=3, gapMax=2), Settings(rounds=-1)):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 settings.validate()
+
+    def test_each_region_owns_its_wait_and_last_region_uses_round_interval(self):
+        regions = [Region("A", 1, 1, 1, 1, waitAfterMin=0.125, waitAfterMax=0.125),
+                   Region("B", 2, 2, 2, 2, waitAfterMin=2.375, waitAfterMax=2.375),
+                   Region("C", 3, 3, 3, 3, waitAfterMin=999, waitAfterMax=999)]
+        stop = FakeStop()
+        device = FakeDevice()
+        runTask(device, regions, Settings(intervalMin=20, intervalMax=20, rounds=2), stop, lambda _: None)
+        self.assertEqual(stop.waits, [20, .125, 2.375] * 2)
+        self.assertEqual(device.taps, [(1, 1), (2, 2), (3, 3)] * 2)
+
+    def test_random_delay_is_inclusive_integer_milliseconds(self):
+        rng = random.Random(42)
+        results = {randomDelay(rng, 2.000, 2.003) for _ in range(100)}
+        self.assertEqual(results, {2.000, 2.001, 2.002, 2.003})
+        self.assertEqual(randomDelay(rng, 0, 0), 0)
+        self.assertEqual(randomDelay(rng, 1.001, 1.001), 1.001)
+
+    def test_region_wait_validation(self):
+        Region("A", 0, 0, 1, 1, waitAfterMin=0, waitAfterMax=0).validate()
+        for low, high in ((-1, 2), (3, 2), (float("nan"), 2), (1, float("inf")), (1.0001, 2)):
+            with self.subTest(low=low, high=high), self.assertRaises(ValueError):
+                Region("A", 0, 0, 1, 1, waitAfterMin=low, waitAfterMax=high).validate()
 
     def test_adb_failure_aborts_without_retry(self):
         device = FakeDevice()

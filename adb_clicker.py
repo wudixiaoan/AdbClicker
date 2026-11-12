@@ -94,8 +94,9 @@ class ClickerApp:
 
         area = ttk.LabelFrame(outer, text="2. 点击区域（屏幕像素坐标，包含边界；按列表顺序执行）", padding=8)
         area.pack(fill="x", pady=8)
-        self.tree = ttk.Treeview(area, columns=("name", "rect", "count"), show="headings", height=4, selectmode="browse")
-        for key, label, width in (("name", "名称", 160), ("rect", "左上角 → 右下角", 400), ("count", "每轮点击次数", 150)):
+        self.tree = ttk.Treeview(area, columns=("name", "rect", "count", "wait"), show="headings", height=4, selectmode="browse")
+        for key, label, width in (("name", "名称", 130), ("rect", "左上角 → 右下角", 300),
+                                   ("count", "每轮点击次数", 120), ("wait", "完成后等待(秒)", 220)):
             self.tree.heading(key, text=label)
             self.tree.column(key, width=width)
         self.tree.pack(fill="x")
@@ -104,8 +105,10 @@ class ClickerApp:
         editor.pack(fill="x")
         for label, key, default, row, col in (("名称", "name", "区域 1", 0, 0), ("左 X", "x1", 0, 0, 2),
                 ("上 Y", "y1", 0, 0, 4), ("右 X", "x2", 100, 1, 2), ("下 Y", "y2", 100, 1, 4),
-                ("最少次数", "minClicks", 1, 2, 0), ("最多次数", "maxClicks", 3, 2, 2)):
+                ("最少次数", "minClicks", 1, 2, 0), ("最多次数", "maxClicks", 3, 2, 2),
+                ("完成后等待最小(秒)", "waitAfterMin", 1, 3, 0), ("最大(秒)", "waitAfterMax", 2, 3, 2)):
             self.field(editor, label, key, default, row, col)
+        ttk.Label(area, text="时间支持 3 位小数（1 毫秒）；最后一个区域完成后使用轮间隔。").pack(anchor="w")
         buttons = ttk.Frame(area)
         buttons.pack(fill="x")
         for label, callback in (("采集屏幕并框选", self.capture), ("添加区域", self.addRegion),
@@ -117,9 +120,7 @@ class ClickerApp:
         for label, key, default, row, col in (("轮间隔最小(秒)", "intervalMin", 20, 0, 0),
                 ("最大(秒)", "intervalMax", 22, 0, 2), ("区域内点击间隔最小(秒)", "gapMin", 0.2, 1, 0),
                 ("最大(秒)", "gapMax", 0.5, 1, 2),
-                ("区域间隔最小(秒)", "regionGapMin", 1, 2, 0),
-                ("最大(秒)", "regionGapMax", 2, 2, 2),
-                ("循环轮数(0=无限)", "rounds", 0, 3, 0)):
+                ("循环轮数(0=无限)", "rounds", 0, 2, 0)):
             self.field(timing, label, key, default, row, col)
         bar = ttk.Frame(outer)
         bar.pack(fill="x", pady=6)
@@ -161,13 +162,15 @@ class ClickerApp:
 
     def readRegion(self):
         region = Region(self.values["name"].get().strip(), **{
-            key: int(self.values[key].get()) for key in ("x1", "y1", "x2", "y2", "minClicks", "maxClicks")})
+            key: int(self.values[key].get()) for key in ("x1", "y1", "x2", "y2", "minClicks", "maxClicks")},
+                        waitAfterMin=float(self.values["waitAfterMin"].get()),
+                        waitAfterMax=float(self.values["waitAfterMax"].get()))
         region.validate()
         return region
 
     def readSettings(self):
         settings = Settings(**{key: float(self.values[key].get()) for key in
-                              ("intervalMin", "intervalMax", "gapMin", "gapMax", "regionGapMin", "regionGapMax")},
+                              ("intervalMin", "intervalMax", "gapMin", "gapMax")},
                             rounds=int(self.values["rounds"].get()))
         settings.validate()
         return settings
@@ -180,7 +183,8 @@ class ClickerApp:
         self.tree.delete(*self.tree.get_children())
         for index, region in enumerate(self.regions):
             self.tree.insert("", "end", iid=str(index), values=(region.name,
-                f"({region.x1}, {region.y1}) → ({region.x2}, {region.y2})", f"{region.minClicks}～{region.maxClicks}"))
+                f"({region.x1}, {region.y1}) → ({region.x2}, {region.y2})", f"{region.minClicks}～{region.maxClicks}",
+                f"{region.waitAfterMin:.3f}～{region.waitAfterMax:.3f}" if index < len(self.regions) - 1 else "使用轮间隔"))
         if selected is not None:
             self.tree.selection_set(str(selected))
 
@@ -273,7 +277,7 @@ class ClickerApp:
         window.transient(self.root)
         window.grab_set()
         scale = max(1, math.ceil(width / max(300, self.root.winfo_screenwidth() - 120)),
-                    math.ceil(height / max(100, self.root.winfo_screenheight() - 340)))
+                    math.ceil(height / max(100, self.root.winfo_screenheight() - 380)))
         ttk.Label(window, text="在屏幕图片上按住鼠标左键拖动，框选后点击“添加此区域”。可连续添加多个区域。",
                   wraplength=580).pack(padx=10, pady=8)
         photo = tk.PhotoImage(data=base64.b64encode(data)).subsample(scale)
@@ -289,9 +293,14 @@ class ClickerApp:
         name = tk.StringVar(value=f"区域 {len(self.regions) + 1}")
         minClicks = tk.StringVar(value=self.values["minClicks"].get())
         maxClicks = tk.StringVar(value=self.values["maxClicks"].get())
+        waitAfterMin = tk.StringVar(value=self.values["waitAfterMin"].get())
+        waitAfterMax = tk.StringVar(value=self.values["waitAfterMax"].get())
         for column, (label, variable, size) in enumerate((("名称", name, 16), ("最少次数", minClicks, 6), ("最多次数", maxClicks, 6))):
             ttk.Label(form, text=label).grid(row=0, column=column * 2, padx=3)
             ttk.Entry(form, textvariable=variable, width=size).grid(row=0, column=column * 2 + 1, padx=3)
+        for column, (label, variable) in enumerate((("完成后等待最小(秒)", waitAfterMin), ("最大(秒)", waitAfterMax))):
+            ttk.Label(form, text=label).grid(row=1, column=column * 2, padx=3, pady=5)
+            ttk.Entry(form, textvariable=variable, width=10).grid(row=1, column=column * 2 + 1, padx=3, pady=5)
 
         def drawRegions():
             canvas.delete("saved")
@@ -335,7 +344,8 @@ class ClickerApp:
             if "rect" not in selection:
                 return
             try:
-                region = Region(name.get().strip(), *selection["rect"], int(minClicks.get()), int(maxClicks.get()))
+                region = Region(name.get().strip(), *selection["rect"], int(minClicks.get()), int(maxClicks.get()),
+                                float(waitAfterMin.get()), float(waitAfterMax.get()))
                 region.validate(width, height)
             except ValueError as exc:
                 messagebox.showerror("区域配置无效", str(exc), parent=window)
@@ -399,7 +409,7 @@ class ClickerApp:
             path = filedialog.asksaveasfilename(defaultextension=".json", initialfile="clicker-config.json",
                                               filetypes=[("JSON 配置", "*.json")])
             if path:
-                config = {"version": 1, "adb": self.values["adb"].get(), "serial": self.serial.get(),
+                config = {"version": 2, "adb": self.values["adb"].get(), "serial": self.serial.get(),
                           "settings": asdict(settings), "regions": [asdict(region) for region in self.regions],
                           "physicalDisplayId": self.client().physicalDisplayId}
                 logger.info("开始保存配置，路径=%s", path)
@@ -415,11 +425,17 @@ class ClickerApp:
         try:
             logger.info("开始读取配置，路径=%s", path)
             config = json.loads(Path(path).read_text(encoding="utf-8"))
-            if config["version"] != 1:
+            if config["version"] not in (1, 2):
                 raise ValueError("不支持的配置版本")
-            settings = Settings(**config["settings"])
+            settingValues = dict(config["settings"])
+            legacyMin = settingValues.pop("regionGapMin", 1.0)
+            legacyMax = settingValues.pop("regionGapMax", 2.0)
+            settings = Settings(**settingValues)
             settings.validate()
-            regions = [Region(**item) for item in config["regions"]]
+            regions = [Region(**{"waitAfterMin": legacyMin, "waitAfterMax": legacyMax, **item})
+                       for item in config["regions"]]
+            if config["version"] == 1:
+                logger.info("旧版区域间隔已迁移为每个区域的完成后等待时间")
             for region in regions:
                 region.validate()
             if not isinstance(config["adb"], str) or not config["adb"].strip() or not isinstance(config["serial"], str):

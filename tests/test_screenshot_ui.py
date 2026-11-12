@@ -1,4 +1,5 @@
 import logging
+import json
 from pathlib import Path
 import struct
 import tempfile
@@ -45,6 +46,8 @@ class ScreenshotTests(unittest.TestCase):
     def test_multiple_selections_on_scaled_screenshot(self):
         self.root.deiconify()
         self.root.update()
+        self.app.values["waitAfterMin"].set("2.125")
+        self.app.values["waitAfterMax"].set("3.375")
         client = AdbClient(serial="test")
         with patch.object(client, "run", return_value=b"[Warning] Multiple displays were found!\n" + makePng(201, 401)), \
                 patch.object(client, "displays", return_value=[Display("123", 0, 201, 401, "ON")]):
@@ -65,6 +68,7 @@ class ScreenshotTests(unittest.TestCase):
         canvas.event_generate("<ButtonRelease-1>", x=10, y=20)
         addButton.invoke()
         region = self.app.regions[0]
+        self.assertEqual((region.waitAfterMin, region.waitAfterMax), (2.125, 3.375))
         self.assertEqual((region.x1, region.y1, region.x2, region.y2), (30, 60, 122, 182))
         self.assertTrue(addButton.instate(["disabled"]))
         self.assertTrue(window.winfo_exists())
@@ -91,6 +95,9 @@ class ScreenshotTests(unittest.TestCase):
         self.app.serial.set("device-a")
         self.app.resetDisplays()
         self.app.screen.set(Display("222", 0, 1060, 2376, "ON").label)
+        self.app.values["waitAfterMin"].set("2.125")
+        self.app.values["waitAfterMax"].set("3.375")
+        self.app.addRegion()
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             path = str(Path(directory) / "config.json")
             with patch("adb_clicker.filedialog.asksaveasfilename", return_value=path), \
@@ -101,6 +108,28 @@ class ScreenshotTests(unittest.TestCase):
                     patch.object(self.app, "error", side_effect=AssertionError("加载失败")):
                 self.app.loadConfig()
             self.assertEqual(self.app.client().physicalDisplayId, "222")
+            self.assertEqual((self.app.regions[0].waitAfterMin, self.app.regions[0].waitAfterMax), (2.125, 3.375))
+
+    def test_load_legacy_config_migrates_global_wait_to_each_region(self):
+        config = {"version": 1, "adb": "adb", "serial": "test",
+                  "settings": {"regionGapMin": 4.125, "regionGapMax": 5.375},
+                  "regions": [{"name": name, "x1": 0, "y1": 0, "x2": 10, "y2": 10} for name in ("A", "B")]}
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            path = Path(directory) / "legacy.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with patch("adb_clicker.filedialog.askopenfilename", return_value=str(path)), \
+                    patch.object(self.app, "error", side_effect=AssertionError("迁移失败")):
+                self.app.loadConfig()
+        self.assertEqual(len(self.app.regions), 2)
+        for region in self.app.regions:
+            self.assertEqual((region.waitAfterMin, region.waitAfterMax), (4.125, 5.375))
+        self.app.tree.selection_set("0")
+        self.app.selectRegion()
+        self.app.values["waitAfterMin"].set("0.250")
+        self.app.values["waitAfterMax"].set("0.750")
+        self.app.updateRegion()
+        self.assertEqual(self.app.regions[0].waitAfterMin, .25)
+        self.assertEqual(self.app.regions[1].waitAfterMin, 4.125)
 
 
 if __name__ == "__main__":
