@@ -97,7 +97,7 @@ class ClickerApp:
             self.field(editor, label, key, default, row, col)
         buttons = ttk.Frame(area)
         buttons.pack(fill="x")
-        for label, callback in (("截图框选", self.capture), ("添加区域", self.addRegion),
+        for label, callback in (("采集屏幕并框选", self.capture), ("添加区域", self.addRegion),
                                 ("更新选中", self.updateRegion), ("删除选中", self.removeRegion),
                                 ("上移", lambda: self.moveRegion(-1)), ("下移", lambda: self.moveRegion(1))):
             self.button(buttons, label, callback)
@@ -227,6 +227,8 @@ class ClickerApp:
     def capture(self):
         try:
             client = self.client()
+            if not client.serial:
+                raise ValueError("请先刷新并选择设备，再采集屏幕")
             self.status.set("正在读取设备截图…")
             self.background(client.screenshot, "screenshot")
         except ValueError as exc:
@@ -235,21 +237,49 @@ class ClickerApp:
     def showScreenshot(self, result):
         data, width, height = result
         window = tk.Toplevel(self.root)
-        window.title(f"拖动框选区域 · 原始屏幕 {width}×{height}")
+        window.title(f"设备屏幕 · 拖动选取多个点击区域 · {width}×{height}")
         window.transient(self.root)
         window.grab_set()
         scale = max(1, math.ceil(width / max(300, self.root.winfo_screenwidth() - 120)),
-                    math.ceil(height / max(300, self.root.winfo_screenheight() - 200)))
+                    math.ceil(height / max(100, self.root.winfo_screenheight() - 340)))
+        ttk.Label(window, text="在屏幕图片上按住鼠标左键拖动，框选后点击“添加此区域”。可连续添加多个区域。",
+                  wraplength=580).pack(padx=10, pady=8)
         photo = tk.PhotoImage(data=base64.b64encode(data)).subsample(scale)
-        canvas = tk.Canvas(window, width=photo.width(), height=photo.height(), highlightthickness=0)
+        canvas = tk.Canvas(window, width=photo.width(), height=photo.height(), highlightthickness=0, cursor="crosshair")
         canvas.pack()
         canvas.image = photo
         canvas.create_image(0, 0, image=photo, anchor="nw")
         selection = {}
+        hint = tk.StringVar(value="尚未选择区域。绿色框为已添加区域，红色框为当前选区。")
+        ttk.Label(window, textvariable=hint, wraplength=580).pack(padx=10, pady=5)
+        form = ttk.Frame(window)
+        form.pack(padx=10, fill="x")
+        name = tk.StringVar(value=f"区域 {len(self.regions) + 1}")
+        minClicks = tk.StringVar(value=self.values["minClicks"].get())
+        maxClicks = tk.StringVar(value=self.values["maxClicks"].get())
+        for column, (label, variable, size) in enumerate((("名称", name, 16), ("最少次数", minClicks, 6), ("最多次数", maxClicks, 6))):
+            ttk.Label(form, text=label).grid(row=0, column=column * 2, padx=3)
+            ttk.Entry(form, textvariable=variable, width=size).grid(row=0, column=column * 2 + 1, padx=3)
+
+        def drawRegions():
+            canvas.delete("saved")
+            for index, region in enumerate(self.regions):
+                if region.x2 >= width or region.y2 >= height:
+                    continue
+                canvas.create_rectangle(region.x1 / scale, region.y1 / scale,
+                                        (region.x2 + 1) / scale, (region.y2 + 1) / scale,
+                                        outline="#00c853", width=2, tags="saved")
+                canvas.create_text(region.x1 / scale + 3, region.y1 / scale + 3,
+                                   text=f"{index + 1}. {region.name}", fill="#00c853", anchor="nw", tags="saved")
+
+        drawRegions()
         def position(event):
             return max(0, min(event.x, photo.width() - 1)), max(0, min(event.y, photo.height() - 1))
         def press(event):
             canvas.delete("selection")
+            selection.clear()
+            addButton.configure(state="disabled")
+            fillButton.configure(state="disabled")
             selection["start"] = position(event)
         def drag(event):
             if "start" in selection:
@@ -264,6 +294,33 @@ class ClickerApp:
                                  min(width - 1, (max(startX, endX) + 1) * scale - 1),
                                  min(height - 1, (max(startY, endY) + 1) * scale - 1))
             drag(event)
+            x1, y1, x2, y2 = selection["rect"]
+            hint.set(f"选区：({x1}, {y1}) → ({x2}, {y2})，大小 {x2 - x1 + 1}×{y2 - y1 + 1} 像素")
+            addButton.configure(state="normal")
+            fillButton.configure(state="normal")
+
+        def addSelection():
+            if "rect" not in selection:
+                return
+            try:
+                region = Region(name.get().strip(), *selection["rect"], int(minClicks.get()), int(maxClicks.get()))
+                region.validate(width, height)
+            except ValueError as exc:
+                messagebox.showerror("区域配置无效", str(exc), parent=window)
+                return
+            self.regions.append(region)
+            self.redraw()
+            drawRegions()
+            canvas.delete("selection")
+            selection.clear()
+            addButton.configure(state="disabled")
+            fillButton.configure(state="disabled")
+            name.set(f"区域 {len(self.regions) + 1}")
+            hint.set(f"已添加“{region.name}”，可继续拖动框选下一个区域。")
+            self.status.set(f"已添加 {len(self.regions)} 个区域，可继续框选或关闭截图窗口。")
+            logger.info("截图选区已添加，区域=%s，坐标=(%s,%s)-(%s,%s)",
+                        region.name, region.x1, region.y1, region.x2, region.y2)
+
         def apply():
             if "rect" not in selection:
                 return
@@ -274,7 +331,13 @@ class ClickerApp:
         canvas.bind("<ButtonPress-1>", press)
         canvas.bind("<B1-Motion>", drag)
         canvas.bind("<ButtonRelease-1>", release)
-        ttk.Button(window, text="使用选区坐标", command=apply).pack(pady=6)
+        actions = ttk.Frame(window)
+        actions.pack(pady=8)
+        addButton = ttk.Button(actions, text="添加此区域", command=addSelection, state="disabled")
+        addButton.pack(side="left", padx=4)
+        fillButton = ttk.Button(actions, text="仅填入主界面坐标", command=apply, state="disabled")
+        fillButton.pack(side="left", padx=4)
+        ttk.Button(actions, text="完成框选", command=window.destroy).pack(side="left", padx=4)
 
     def start(self):
         try:
